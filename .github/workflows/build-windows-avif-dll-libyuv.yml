@@ -1,0 +1,64 @@
+name: Build Windows avif.dll (libyuv)
+
+on:
+  push:
+    paths:
+      - ".github/actions/**"
+      - ".github/workflows/build-windows-avif-dll-libyuv.yml"
+      - "**CMakeLists.txt"
+      - "cmake/**"
+      - "ext/**"
+      - "src/**"
+      - "include/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build-avif-dll-libyuv:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Windows (dav1d SYSTEM, libyuv SYSTEM)
+        id: setup
+        uses: ./.github/actions/setup-windows
+        with:
+          codec-aom: "OFF"
+          codec-dav1d: "SYSTEM"
+          libyuv: "SYSTEM"
+          libxml2: "OFF"
+          extra-cache-key: dll-libyuv
+
+      - name: Build libsharpyuv (LOCAL)
+        if: steps.setup.outputs.ext-cache-hit != 'true'
+        working-directory: ./ext
+        run: ./libsharpyuv.cmd
+
+      - name: Configure (CMake, MSVC, libyuv SYSTEM)
+        run: >
+          cmake ${{ steps.setup.outputs.vcpkg-cmake-config }} -G "Visual Studio 17 2022" -A x64 -S . -B build
+          -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON
+          -DAVIF_CODEC_AOM=OFF -DAVIF_CODEC_DAV1D=SYSTEM
+          -DAVIF_LIBYUV=SYSTEM -DAVIF_LIBSHARPYUV=LOCAL
+          -DAVIF_BUILD_APPS=OFF -DAVIF_BUILD_TESTS=OFF
+          -DAVIF_ENABLE_WERROR=OFF
+          -DCMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION=10
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Upload avif.dll artifacts (libyuv)
+        uses: actions/upload-artifact@v4
+        with:
+          name: avif-windows-x64-msvc-libyuv
+          if-no-files-found: error
+          path: |
+            build/Release/avif.dll
+            build/Release/avif.lib
+            build/Release/avif.pdb

@@ -58,6 +58,12 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         uses: seanmiddleditch/gha-setup-ninja@8b297075da4cd2a5f1fd21fe011b499edf06e9d2 # v4
 
+      - name: Set up latest CMake
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: jwlawson/actions-setup-cmake@802fa1a2c4e212495c05bf94dba2704a92a472be # v2.0.2
+        with:
+          cmake-version: "latest"
+
       - name: Set up nasm (for asm)
         if: steps.cache.outputs.cache-hit != 'true'
         uses: ilammy/setup-nasm@13cbeb366c45c4379d3478cdcbadd8295feb5028 # v1.5.1

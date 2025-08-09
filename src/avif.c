@@ -1,6 +1,7 @@
 // Copyright 2019 Joe Drago. All rights reserved.
 // SPDX-License-Identifier: BSD-2-Clause
 
+// Fork build: Windows DLL workflow marker
 #include "avif/internal.h"
 
 #include <assert.h>

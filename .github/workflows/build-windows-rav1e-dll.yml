@@ -1,0 +1,66 @@
+name: Build Windows rav1e.dll
+
+on:
+  push:
+    paths:
+      - ".github/workflows/build-windows-rav1e-dll.yml"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "rav1e tag: 'latest' for latest release or specify like v0.8.1"
+        required: false
+        default: "latest"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build-rav1e-dll:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Developer Command Prompt for Microsoft Visual C++
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set rust toolchain
+        uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af # v1.0.7
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Install cargo-c
+        run: cargo install --locked cargo-c
+
+      - name: Clone rav1e
+        shell: pwsh
+        run: |
+          $InputTag = '${{ github.event.inputs.tag }}'
+          if ($InputTag -eq 'latest' -or [string]::IsNullOrEmpty($InputTag)) {
+            $Release = Invoke-RestMethod -Headers @{ 'Accept' = 'application/vnd.github+json' } -Uri 'https://api.github.com/repos/xiph/rav1e/releases/latest'
+            $Tag = $Release.tag_name
+          } else {
+            $Tag = $InputTag
+          }
+          echo "Using rav1e tag: $Tag"
+          git clone -b $Tag --depth 1 https://github.com/xiph/rav1e.git
+
+      - name: Build rav1e (cdylib)
+        working-directory: ./rav1e
+        run: |
+          mkdir build.install
+          cargo cinstall --release --library-type=cdylib --prefix=/usr --destdir build.install
+
+      - name: Upload rav1e.dll artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rav1e-windows-x64-msvc
+          if-no-files-found: error
+          path: |
+            rav1e/build.install/usr/bin/rav1e.dll
+            rav1e/build.install/usr/lib/rav1e.lib
+            rav1e/build.install/usr/include/rav1e/**

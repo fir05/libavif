@@ -1,0 +1,162 @@
+name: Sync upstream, build, and release (Windows)
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Get upstream latest commit
+        id: upstream
+        shell: pwsh
+        run: |
+          git remote add upstream https://github.com/AOMediaCodec/libavif.git
+          git fetch upstream main --depth=1
+          $sha = (git rev-parse FETCH_HEAD).Substring(0, 12)
+          echo "sha=$sha" >> $env:GITHUB_OUTPUT
+
+      - name: Check upstream cache (skip if unchanged)
+        id: cache
+        uses: actions/cache@0c45773b623bea8c8e75f6c82b208c3cf94ea4f9 # v4.0.2
+        with:
+          path: .upstream_sha
+          key: upstream-${{ steps.upstream.outputs.sha }}
+
+      - name: Stop if no changes upstream
+        if: steps.cache.outputs.cache-hit == 'true'
+        run: echo "No upstream changes; exiting."
+
+      - name: Setup Developer Command Prompt for Microsoft Visual C++
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up Python
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.1.0
+        with:
+          python-version: '3.x'
+
+      - name: Install meson
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: pip install meson
+
+      - name: Set up ninja
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: seanmiddleditch/gha-setup-ninja@8b297075da4cd2a5f1fd21fe011b499edf06e9d2 # v4
+
+      - name: Set up nasm (for asm)
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: ilammy/setup-nasm@13cbeb366c45c4379d3478cdcbadd8295feb5028 # v1.5.1
+
+      - name: Build dav1d (shared)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: >
+          meson setup --default-library=shared --buildtype release
+          --prefix="${{ github.workspace }}\\dav1d\\install" --libdir=lib
+          -Denable_tools=false -Denable_examples=false -Denable_tests=false -Denable_docs=false
+          dav1d/build dav1d
+
+      - name: Build dav1d
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: meson compile -C dav1d/build
+
+      - name: Install dav1d
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: meson install -C dav1d/build
+
+      - name: Build libyuv (LOCAL, static)
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: ./ext
+        run: |
+          set CC=clang-cl
+          set CXX=clang-cl
+          ./libyuv.cmd
+
+      - name: Build libsharpyuv (LOCAL, static)
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: ./ext
+        run: ./libsharpyuv.cmd
+
+      - name: Configure libavif (avif.dll with static libyuv)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: >
+          cmake -G "Visual Studio 17 2022" -A x64 -S . -B build
+          -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON
+          -DAVIF_CODEC_AOM=OFF -DAVIF_CODEC_DAV1D=SYSTEM
+          -DDAV1D_INCLUDE_DIR=${{ github.workspace }}\\dav1d\\install\\include
+          -DDAV1D_LIBRARY=${{ github.workspace }}\\dav1d\\install\\lib\\dav1d.lib
+          -DAVIF_LIBYUV=LOCAL -DAVIF_LIBSHARPYUV=LOCAL
+          -DAVIF_BUILD_APPS=OFF -DAVIF_BUILD_TESTS=OFF
+          -DAVIF_ENABLE_WERROR=OFF
+          -DCMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION=10
+
+      - name: Build avif.dll
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Prepare release files
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -Force -ItemType Directory dist | Out-Null
+          Copy-Item build/Release/avif.dll dist/
+          Copy-Item build/Release/avif.lib dist/ -ErrorAction SilentlyContinue
+          Copy-Item build/Release/avif.pdb dist/ -ErrorAction SilentlyContinue
+          Copy-Item dav1d/install/bin/*.dll dist/
+          Copy-Item dav1d/install/lib/*.lib dist/
+          echo "Upstream: ${{ steps.upstream.outputs.sha }}" | Out-File -Encoding utf8 -FilePath dist/BUILD_INFO.txt
+
+      - name: Zip artifacts
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: thedoctor0/zip-release@b57d897cb5d60cb78b51a507f63fa184cfe35554 # 0.7.6
+        with:
+          type: zip
+          filename: avif-windows-${{ steps.upstream.outputs.sha }}.zip
+          directory: dist
+          path: .
+
+      - name: Create GitHub release
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/create-release@a97a75516f3127c9d14e8c796fb2677bf4c7bb5f # v1.1.4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: upstream-${{ steps.upstream.outputs.sha }}
+          release_name: upstream-${{ steps.upstream.outputs.sha }}
+          body: |
+            Automated build for upstream commit ${{ steps.upstream.outputs.sha }}
+            Includes: avif.dll (static libyuv), dav1d.dll
+          draft: false
+          prerelease: false
+
+      - name: Upload release asset
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.upstream.outputs.upload_url || github.event.release.upload_url }}
+          asset_path: dist/avif-windows-${{ steps.upstream.outputs.sha }}.zip
+          asset_name: avif-windows-${{ steps.upstream.outputs.sha }}.zip
+          asset_content_type: application/zip
+
+      - name: Save upstream marker to cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -Force -ItemType Directory .upstream_sha | Out-Null
+          Set-Content .upstream_sha/marker.txt ${{ steps.upstream.outputs.sha }}

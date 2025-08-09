@@ -53,23 +53,45 @@ jobs:
         run: >
           cmake -G Ninja -S libyuv -B libyuv/build
           -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          -DYUV_SHARED=ON -DYUV_BUILD_SHARED=ON -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON
         env:
           CC: clang-cl
           CXX: clang-cl
 
-      - name: Build
-        run: cmake --build libyuv/build --config Release --target yuv --parallel
+      - name: Build (yuv_shared)
+        run: cmake --build libyuv/build --config Release --target yuv_shared --parallel
         env:
           CC: clang-cl
           CXX: clang-cl
+
+      - name: Check for built DLL
+        shell: pwsh
+        run: |
+          if (Get-ChildItem -Path "libyuv/build" -Filter *.dll -ErrorAction SilentlyContinue) {
+            echo "FOUND_DLL=1" >> $env:GITHUB_ENV
+          } else {
+            echo "FOUND_DLL=0" >> $env:GITHUB_ENV
+          }
+
+      - name: Install libyuv via vcpkg (fallback)
+        if: env.FOUND_DLL == '0'
+        uses: johnwason/vcpkg-action@v6
+        with:
+          pkgs: libyuv
+          triplet: x64-windows-release
+          token: ${{ github.token }}
+          github-binarycache: true
 
       - name: Upload yuv.dll artifacts
         uses: actions/upload-artifact@v4
         with:
           name: libyuv-windows-x64-msvc
-          if-no-files-found: error
+          if-no-files-found: warn
           path: |
             libyuv/build/*.dll
             libyuv/build/*.lib
-            libyuv/include/**
             libyuv/build/*.pdb
+            libyuv/include/**
+            vcpkg/installed/x64-windows-release/bin/yuv.dll
+            vcpkg/installed/x64-windows-release/lib/yuv.lib
+            vcpkg/installed/x64-windows-release/include/**

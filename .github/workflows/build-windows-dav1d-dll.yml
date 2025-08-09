@@ -1,0 +1,79 @@
+name: Build Windows dav1d.dll
+
+on:
+  push:
+    paths:
+      - ".github/workflows/build-windows-dav1d-dll.yml"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "dav1d tag: 'latest' for latest tag or specify like 1.5.1"
+        required: false
+        default: "latest"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build-dav1d-dll:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Developer Command Prompt for Microsoft Visual C++
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up Python
+        uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.1.0
+        with:
+          python-version: "3.x"
+      - name: Install meson
+        run: pip install meson
+      - name: Set up ninja
+        uses: seanmiddleditch/gha-setup-ninja@8b297075da4cd2a5f1fd21fe011b499edf06e9d2 # v4
+      - name: Set up nasm (for asm)
+        uses: ilammy/setup-nasm@13cbeb366c45c4379d3478cdcbadd8295feb5028 # v1.5.1
+
+      - name: Clone dav1d
+        shell: pwsh
+        run: |
+          $InputTag = '${{ github.event.inputs.tag }}'
+          try {
+            if ($InputTag -eq 'latest' -or [string]::IsNullOrEmpty($InputTag)) {
+              $resp = Invoke-RestMethod -Headers @{ 'Accept' = 'application/json' } -Uri 'https://code.videolan.org/api/v4/projects/videolan%2Fdav1d/repository/tags?per_page=1'
+              $Tag = $resp[0].name
+            } else {
+              $Tag = $InputTag
+            }
+          } catch {
+            $Tag = '1.5.1'
+          }
+          echo "Using dav1d tag: $Tag"
+          git clone -b $Tag --depth 1 https://code.videolan.org/videolan/dav1d.git dav1d
+
+      - name: Configure (meson, shared)
+        run: >
+          meson setup --default-library=shared --buildtype release
+          --prefix="${{ github.workspace }}\\dav1d\\install" --libdir=lib
+          -Denable_tools=false -Denable_examples=false -Denable_tests=false -Denable_docs=false
+          dav1d/build dav1d
+
+      - name: Build
+        run: meson compile -C dav1d/build
+
+      - name: Install
+        run: meson install -C dav1d/build
+
+      - name: Upload dav1d.dll artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dav1d-windows-x64-msvc
+          if-no-files-found: error
+          path: |
+            dav1d/install/bin/*.dll
+            dav1d/install/lib/*.lib
+            dav1d/install/include/**

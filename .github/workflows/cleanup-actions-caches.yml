@@ -1,0 +1,65 @@
+name: Cleanup Actions Caches
+
+on:
+  workflow_dispatch:
+    inputs:
+      keep_windows_only:
+        description: "Keep caches whose key contains 'windows' and delete the rest"
+        required: false
+        default: "true"
+      key_prefix:
+        description: "Optional cache key prefix to delete (deletes all if empty and keep_windows_only is false)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete caches via API
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const keepWindowsOnly = (core.getInput('keep_windows_only') || 'true').toLowerCase() === 'true';
+            const keyPrefix = core.getInput('key_prefix') || '';
+            let page = 1, totalDeleted = 0;
+            core.info(`keepWindowsOnly=${keepWindowsOnly}, keyPrefix='${keyPrefix}'`);
+            while (true) {
+              const { data } = await github.request('GET /repos/{owner}/{repo}/actions/caches', {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+                page
+              });
+              const caches = data.actions_caches || [];
+              if (caches.length === 0) break;
+              for (const c of caches) {
+                const key = c.key || '';
+                const id = c.id;
+                if (keepWindowsOnly && !key.toLowerCase().includes('windows')) {
+                  await github.request('DELETE /repos/{owner}/{repo}/actions/caches/{cache_id}', {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    cache_id: id
+                  });
+                  totalDeleted++;
+                  core.info(`Deleted cache id=${id} key='${key}'`);
+                  continue;
+                }
+                if (!keepWindowsOnly && (keyPrefix === '' || key.startsWith(keyPrefix))) {
+                  await github.request('DELETE /repos/{owner}/{repo}/actions/caches/{cache_id}', {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    cache_id: id
+                  });
+                  totalDeleted++;
+                  core.info(`Deleted cache id=${id} key='${key}'`);
+                }
+              }
+              page++;
+            }
+            core.info(`Total caches deleted: ${totalDeleted}`);

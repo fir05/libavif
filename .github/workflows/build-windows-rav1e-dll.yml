@@ -49,11 +49,14 @@ jobs:
           echo "Using rav1e tag: $Tag"
           git clone -b $Tag --depth 1 https://github.com/xiph/rav1e.git
 
+      - name: Set up nasm (for asm)
+        uses: ilammy/setup-nasm@13cbeb366c45c4379d3478cdcbadd8295feb5028 # v1.5.1
+
       - name: Build rav1e (cdylib)
         working-directory: ./rav1e
         run: |
           mkdir build.install
-          cargo cinstall --release --library-type=cdylib --prefix=/usr --destdir build.install
+          $env:RUSTFLAGS="-C target-feature=+crt-static"; cargo cinstall --release --library-type=cdylib --prefix=/usr --destdir build.install
 
       - name: Upload rav1e.dll artifacts
         uses: actions/upload-artifact@v4
